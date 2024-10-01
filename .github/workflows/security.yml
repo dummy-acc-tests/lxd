@@ -67,6 +67,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ (matrix.version == 'latest' && 'main') || format('stable-{0}', matrix.version) }}*'
 
       - name: Install Trivy
         env:
@@ -97,17 +99,17 @@ jobs:
           jq '.runs[].tool.driver.rules[] |= (.shortDescription.text |= "Snap scan - " + .)' ${{ matrix.version }}-stable.sarif > tmp.json
           mv tmp.json ${{ matrix.version }}-stable.sarif
 
-      - name: Get correct SHA for the version used in snap
-        run: |
-          git fetch --tags
-          tag=$(git tag -l '${{ (matrix.version == 'latest' && 'lxd-') || format('lxd-{0}.', matrix.version) }}*' --sort=-v:refname | head -n 1)
-          sha=$(git rev-list -n 1 $tag)
-          echo "sha=$sha" >> $GITHUB_ENV
+      #- name: Get correct SHA for the version used in snap
+       # run: |
+        #  git fetch --tags
+         # tag=$(git tag -l '${{ (matrix.version == 'latest' && 'lxd-') || format('lxd-{0}.', matrix.version) }}*' --sort=-v:refname | head -n 1)
+          #sha=$(git rev-list -n 1 $tag)
+          #echo "sha=$sha" >> $GITHUB_ENV
 
       - name: Upload Trivy scan results to GitHub security tab
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: "${{ matrix.version }}-stable.sarif"
           # Use the sha from the version used in the snap.
-          sha: ${{ env.sha }}
+          sha: ${{ github.sha }}
           ref: refs/heads/${{ (matrix.version == 'latest' && 'main') || format('stable-{0}', matrix.version) }}
