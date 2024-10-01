@@ -20,30 +20,31 @@ jobs:
   trivy-repo:
     name: Trivy vulnerability scanner - Repository
     runs-on: ubuntu-22.04
-    if: ${{ ( github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ) && github.ref_name == 'main' && github.repository == 'canonical/lxd' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: main
 
-      - name: Create Trivy cache directory
-        run: mkdir -p /home/runner/vuln-cache
+      - name: Install Trivy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /home/runner/vuln-cache
+          latest=$(gh release view --repo aquasecurity/trivy --json tagName -q '.tagName' | head -n 1)
+          wget https://github.com/aquasecurity/trivy/releases/download/${latest}/trivy_${latest#v}_Linux-64bit.deb
+          sudo dpkg -i trivy_${latest#v}_Linux-64bit.deb
 
-      - name: Run Trivy vulnerability scanner in repo mode
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: "fs"
-          format: "sarif"
-          output: "trivy-lxd-repo-scan-results.sarif"
-          cache-dir: "/home/runner/vuln-cache"
-          severity: "LOW,MEDIUM,HIGH,CRITICAL"
+      - name: Run Trivy vulnerability scanner
+        run: |
+          trivy fs --quiet --scanners vuln,secret,misconfig --format sarif --cache-dir /home/runner/vuln-cache \
+          --severity LOW,MEDIUM,HIGH,CRITICAL --output trivy-lxd-repo-scan-results.sarif .
 
       - name: Cache trivy and vulnerability database
         uses: actions/cache/save@v4
         with:
           path: /home/runner/vuln-cache
-          key: trivy-cache
+          key: trivy-cache-${{ github.run_id }}
 
       - name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
@@ -56,7 +57,6 @@ jobs:
     name: Trivy vulnerability scanner - Snap
     runs-on: ubuntu-22.04
     needs: trivy-repo
-    if: ${{ ( github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ) && github.ref_name == 'main' && github.repository == 'canonical/lxd' }}
     strategy:
       matrix:
         version:
@@ -67,40 +67,47 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          # Snap scanner results are placed on the the branch related to the scanned channel.
-          ref: ${{ (matrix.version == 'latest' && 'main') || format('stable-{0}', matrix.version) }}
+
+      - name: Install Trivy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh release view --repo aquasecurity/trivy --json tagName -q '.tagName' | head -n 1)
+          wget https://github.com/aquasecurity/trivy/releases/download/${latest}/trivy_${latest#v}_Linux-64bit.deb
+          sudo dpkg -i trivy_${latest#v}_Linux-64bit.deb
 
       - name: Restore cached Trivy and vulnerability database
         uses: actions/cache/restore@v4
         with:
           path: /home/runner/vuln-cache
-          key: trivy-cache
+          key: trivy-cache-${{ github.run_id }}
 
       - name: Download snap for scan
         run: |
-          ls /home/runner/vuln-cache
           snap download lxd --channel=${{ matrix.version }}/stable
           unsquashfs ./lxd*.snap
 
-      - name: Run Trivy vulnerability scanner on the snap
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: "rootfs"
-          format: "sarif"
-          scan-ref: squashfs-root
-          output: "${{ matrix.version }}-stable.sarif"
-          cache-dir: "/home/runner/vuln-cache"
-          severity: "LOW,MEDIUM,HIGH,CRITICAL"
+      - name: Run Trivy vulnerability scanner
+        run: |
+          trivy rootfs --quiet --scanners vuln,secret,misconfig --format sarif --cache-dir /home/runner/vuln-cache \
+          --severity LOW,MEDIUM,HIGH,CRITICAL --output ${{ matrix.version }}-stable.sarif squashfs-root
 
-      - name: Prepend channel to alert name
+      - name: Flag alerts from snap scanning
         run: |
           jq '.runs[].tool.driver.rules[] |= (.shortDescription.text |= "Snap scan - " + .)' ${{ matrix.version }}-stable.sarif > tmp.json
           mv tmp.json ${{ matrix.version }}-stable.sarif
 
-      - name: Upload Trivy scan results to GitHub Security tab
+      - name: Get correct SHA for the version used in snap
+        run: |
+          git fetch --tags
+          tag=$(git tag -l '${{ (matrix.version == 'latest' && 'lxd-') || format('lxd-{0}.', matrix.version) }}*' --sort=-v:refname | head -n 1)
+          sha=$(git rev-list -n 1 $tag)
+          echo "sha=$sha" >> $GITHUB_ENV
+
+      - name: Upload Trivy scan results to GitHub security tab
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: "${{ matrix.version }}-stable.sarif"
-          sha: ${{ github.sha }}
+          # Use the sha from the version used in the snap.
+          sha: ${{ env.sha }}
           ref: refs/heads/${{ (matrix.version == 'latest' && 'main') || format('stable-{0}', matrix.version) }}
