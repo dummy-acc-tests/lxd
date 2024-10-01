@@ -68,7 +68,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ (matrix.version == 'latest' && 'main') || format('stable-{0}', matrix.version) }}*'
+          ref: ${{ (matrix.version == 'latest' && 'main') || format('stable-{0}', matrix.version) }}
 
       - name: Install Trivy
         env:
