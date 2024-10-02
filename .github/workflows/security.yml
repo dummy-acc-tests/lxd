@@ -26,6 +26,9 @@ jobs:
         with:
           ref: main
 
+      # We are using the deb package instead of the trivy action because we need to point to the cache directory
+      # with cache-dir, and there is currently a bug in that functionality on the Trivy GitHub action.
+      # See https://github.com/aquasecurity/trivy-action/issues/12.
       - name: Install Trivy
         env:
           GH_TOKEN: ${{ github.token }}
@@ -40,7 +43,7 @@ jobs:
           trivy fs --quiet --scanners vuln,secret,misconfig --format sarif --cache-dir /home/runner/vuln-cache \
           --severity LOW,MEDIUM,HIGH,CRITICAL --output trivy-lxd-repo-scan-results.sarif .
 
-      - name: Cache trivy and vulnerability database
+      - name: Cache Trivy vulnerability database
         uses: actions/cache/save@v4
         with:
           path: /home/runner/vuln-cache
@@ -78,7 +81,7 @@ jobs:
           wget https://github.com/aquasecurity/trivy/releases/download/${latest}/trivy_${latest#v}_Linux-64bit.deb
           sudo dpkg -i trivy_${latest#v}_Linux-64bit.deb
 
-      - name: Restore cached Trivy and vulnerability database
+      - name: Restore cached Trivy vulnerability database
         uses: actions/cache/restore@v4
         with:
           path: /home/runner/vuln-cache
@@ -94,7 +97,7 @@ jobs:
           trivy rootfs --quiet --scanners vuln,secret,misconfig --format sarif --cache-dir /home/runner/vuln-cache \
           --severity LOW,MEDIUM,HIGH,CRITICAL --output ${{ matrix.version }}-stable.sarif squashfs-root
 
-      - name: Flag alerts from snap scanning
+      - name: Flag snap scanning alerts
         run: |
           jq '.runs[].tool.driver.rules[] |= (.shortDescription.text |= "Snap scan - " + .)' ${{ matrix.version }}-stable.sarif > tmp.json
           mv tmp.json ${{ matrix.version }}-stable.sarif
